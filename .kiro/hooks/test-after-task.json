@@ -1,0 +1,12 @@
+{
+  "name": "Run Tests After Task",
+  "version": "1.0.0",
+  "description": "Runs pytest after a spec task is completed to verify changes",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "pytest tests/unit/ -x -q 2>&1 | tail -20"
+  }
+}
