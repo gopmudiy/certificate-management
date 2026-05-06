@@ -1,0 +1,192 @@
+openapi: 3.0.0
+info:
+  title: CertAgent API
+  version: 1.0.0
+  description: Certificate lifecycle management via DigiCert CertCentral
+
+paths:
+  /scan:
+    post:
+      operationId: scanCertificates
+      summary: Scan DigiCert for certificates expiring within a threshold
+      description: Lists all issued certificates from DigiCert CertCentral and identifies those expiring within the specified number of days.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                threshold_days:
+                  type: integer
+                  description: Number of days to look ahead for expiring certs. Default 30.
+                  default: 30
+      responses:
+        '200':
+          description: List of expiring certificates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_expiring:
+                    type: integer
+                  certificates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Certificate'
+
+  /renew:
+    post:
+      operationId: renewCertificate
+      summary: Renew a specific certificate
+      description: Generates a new CSR, submits a renewal request to DigiCert, and stores the private key in Secrets Manager.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - order_id
+                - common_name
+              properties:
+                order_id:
+                  type: string
+                  description: The DigiCert order ID to renew
+                common_name:
+                  type: string
+                  description: The common name (domain) of the certificate
+                sans:
+                  type: array
+                  items:
+                    type: string
+                  description: Subject Alternative Names to include
+      responses:
+        '200':
+          description: Renewal submitted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  new_order_id:
+                    type: string
+                  status:
+                    type: string
+
+  /status/{order_id}:
+    get:
+      operationId: checkRenewalStatus
+      summary: Check the status of a renewal request
+      description: Queries DigiCert for the current status of a certificate order.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The DigiCert order ID to check
+      responses:
+        '200':
+          description: Order status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id:
+                    type: string
+                  status:
+                    type: string
+                  common_name:
+                    type: string
+
+  /download/{certificate_id}:
+    get:
+      operationId: downloadCertificate
+      summary: Download an issued certificate
+      description: Downloads the certificate, intermediate, and root chain from DigiCert in PEM format.
+      parameters:
+        - name: certificate_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The DigiCert certificate ID to download
+      responses:
+        '200':
+          description: Certificate downloaded and stored
+
+  /inventory:
+    get:
+      operationId: listInventory
+      summary: List certificate inventory
+      description: Returns the full certificate inventory from DynamoDB including renewal history and status.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, renewed, expired]
+          description: Filter by renewal status
+      responses:
+        '200':
+          description: Certificate inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  certificates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InventoryItem'
+
+components:
+  schemas:
+    Certificate:
+      type: object
+      properties:
+        order_id:
+          type: string
+        certificate_id:
+          type: string
+        common_name:
+          type: string
+        sans:
+          type: array
+          items:
+            type: string
+        valid_till:
+          type: string
+        days_remaining:
+          type: integer
+        product_name:
+          type: string
+        organization:
+          type: string
+        priority:
+          type: string
+          enum: [EXPIRED, CRITICAL, HIGH, MEDIUM, LOW]
+
+    InventoryItem:
+      type: object
+      properties:
+        domain:
+          type: string
+        order_id:
+          type: string
+        valid_till:
+          type: string
+        days_remaining:
+          type: integer
+        renewal_status:
+          type: string
+        renewed_at:
+          type: string
+        priority:
+          type: string
