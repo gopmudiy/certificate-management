@@ -170,11 +170,96 @@ def send_notification(expiring_certs):
     )
 
 
+def generate_mock_certificates(threshold_days):
+    """Generate realistic mock certificate data for testing."""
+    now = datetime.now(timezone.utc)
+
+    mock_orders = [
+        {
+            "order_id": "12345678",
+            "certificate_id": "98765432",
+            "common_name": "api.example.com",
+            "sans": ["api.example.com", "api-v2.example.com"],
+            "valid_from": (now - timedelta(days=360)).strftime("%Y-%m-%d"),
+            "valid_till": (now + timedelta(days=3)).strftime("%Y-%m-%d"),
+            "days_remaining": 3,
+            "product_name": "GeoTrust TLS DV RSA Mixed SHA256 2020",
+            "product_type": "ssl_dv_geotrust",
+            "organization": "Example Corp",
+            "status": "issued",
+            "priority": classify_priority(3),
+        },
+        {
+            "order_id": "12345679",
+            "certificate_id": "98765433",
+            "common_name": "portal.example.com",
+            "sans": ["portal.example.com", "www.portal.example.com"],
+            "valid_from": (now - timedelta(days=340)).strftime("%Y-%m-%d"),
+            "valid_till": (now + timedelta(days=12)).strftime("%Y-%m-%d"),
+            "days_remaining": 12,
+            "product_name": "RapidSSL TLS DV RSA Mixed SHA256 2020",
+            "product_type": "ssl_dv_rapidssl",
+            "organization": "Example Corp",
+            "status": "issued",
+            "priority": classify_priority(12),
+        },
+        {
+            "order_id": "12345680",
+            "certificate_id": "98765434",
+            "common_name": "mail.example.com",
+            "sans": ["mail.example.com"],
+            "valid_from": (now - timedelta(days=320)).strftime("%Y-%m-%d"),
+            "valid_till": (now + timedelta(days=25)).strftime("%Y-%m-%d"),
+            "days_remaining": 25,
+            "product_name": "DigiCert TLS RSA SHA256 2020 CA1",
+            "product_type": "ssl_ov_standard",
+            "organization": "Example Corp",
+            "status": "issued",
+            "priority": classify_priority(25),
+        },
+        {
+            "order_id": "12345681",
+            "certificate_id": "98765435",
+            "common_name": "shop.example.com",
+            "sans": ["shop.example.com", "checkout.example.com", "cart.example.com"],
+            "valid_from": (now - timedelta(days=300)).strftime("%Y-%m-%d"),
+            "valid_till": (now + timedelta(days=38)).strftime("%Y-%m-%d"),
+            "days_remaining": 38,
+            "product_name": "DigiCert EV TLS RSA SHA256 2020 CA1",
+            "product_type": "ssl_ev_standard",
+            "organization": "Example Corp",
+            "status": "issued",
+            "priority": classify_priority(38),
+        },
+        {
+            "order_id": "12345682",
+            "certificate_id": "98765436",
+            "common_name": "internal.example.com",
+            "sans": ["internal.example.com", "vpn.example.com"],
+            "valid_from": (now - timedelta(days=370)).strftime("%Y-%m-%d"),
+            "valid_till": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
+            "days_remaining": -2,
+            "product_name": "GeoTrust TLS DV RSA Mixed SHA256 2020",
+            "product_type": "ssl_dv_geotrust",
+            "organization": "Example Corp",
+            "status": "issued",
+            "priority": classify_priority(-2),
+        },
+    ]
+
+    # Filter based on threshold
+    return sorted(
+        [c for c in mock_orders if c["days_remaining"] <= threshold_days],
+        key=lambda x: x["days_remaining"],
+    )
+
+
 def lambda_handler(event, context):
     """
     Main handler. Can be invoked by:
     - EventBridge (daily scan)
     - Bedrock Agent action group (on-demand scan)
+    - Direct invocation with {"use_mock": true} for testing
     """
     threshold_days = int(os.environ.get("EXPIRY_THRESHOLD_DAYS", "30"))
 
@@ -185,11 +270,19 @@ def lambda_handler(event, context):
         for p in event.get("parameters", []):
             params[p["name"]] = p["value"]
         threshold_days = int(params.get("threshold_days", threshold_days))
+        use_mock = params.get("use_mock", "false").lower() == "true"
     elif "threshold_days" in event:
         threshold_days = int(event["threshold_days"])
+        use_mock = event.get("use_mock", False)
+    else:
+        use_mock = event.get("use_mock", False)
 
-    api_key = get_digicert_api_key()
-    expiring_certs = list_expiring_certificates(api_key, threshold_days)
+    # Use mock data for testing or real DigiCert API
+    if use_mock:
+        expiring_certs = generate_mock_certificates(threshold_days)
+    else:
+        api_key = get_digicert_api_key()
+        expiring_certs = list_expiring_certificates(api_key, threshold_days)
 
     # Update DynamoDB inventory
     update_inventory(expiring_certs)

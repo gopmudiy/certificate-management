@@ -133,26 +133,63 @@ def update_inventory(domain, order_id, new_order_id, status):
     )
 
 
+MOCK_ORDER_IDS = {"12345678", "12345679", "12345680", "12345681", "12345682"}
+
+
+def is_mock_order(order_id: str) -> bool:
+    """Detect if an order ID is from mock data."""
+    return order_id in MOCK_ORDER_IDS or order_id.startswith("1234")
+
+
+def mock_renewal(order_id, common_name):
+    """Simulate a successful DigiCert renewal for testing."""
+    import random
+    new_order_id = str(random.randint(90000000, 99999999))
+    return {
+        "new_order_id": new_order_id,
+        "status": "submitted",
+        "message": (
+            f"[MOCK] Renewal submitted for {common_name}. "
+            f"New order {new_order_id} is pending validation. "
+            f"DV certificates typically issue within 5 minutes. "
+            f"OV/EV certificates may take 1-24 hours."
+        ),
+    }
+
+
 def lambda_handler(event, context):
     """
     Renew a certificate.
-    
-    Expected event (from Bedrock Agent):
+
+    Expected event (direct invocation):
     {
         "order_id": "12345678",
-        "common_name": "*.example.com",
-        "sans": ["example.com", "www.example.com"]
+        "common_name": "api.example.com",
+        "sans": ["api.example.com", "api-v2.example.com"],
+        "use_mock": true
     }
+
+    Also supports Bedrock Agent invocation format.
     """
-    order_id = event["order_id"]
-    common_name = event["common_name"]
-    sans = event.get("sans", [])
+    # Handle Bedrock Agent invocation format
+    is_agent = "actionGroup" in event
+    if is_agent:
+        params = {}
+        for p in event.get("parameters", []):
+            params[p["name"]] = p["value"]
+        order_id = params["order_id"]
+        common_name = params["common_name"]
+        sans = params.get("sans", "").split(",") if params.get("sans") else []
+        use_mock = params.get("use_mock", "false").lower() == "true"
+    else:
+        order_id = event["order_id"]
+        common_name = event["common_name"]
+        sans = event.get("sans", [])
+        use_mock = event.get("use_mock", False)
 
     # Ensure common_name is in SANs
     if common_name not in sans:
         sans.insert(0, common_name)
-
-    api_key = get_digicert_api_key()
 
     # Generate new key pair and CSR
     private_key_pem, csr_pem = generate_csr_and_key(common_name, sans)
@@ -160,36 +197,69 @@ def lambda_handler(event, context):
     # Store private key immediately (before renewal, so we don't lose it)
     store_private_key(common_name, private_key_pem, order_id)
 
-    # Submit renewal to DigiCert
-    try:
-        response = submit_renewal(api_key, order_id, csr_pem, common_name)
-        new_order_id = response.get("id", response.get("order_id", "unknown"))
-        status = "submitted"
-    except Exception as e:
-        new_order_id = "failed"
-        status = f"failed: {str(e)}"
+    # Auto-detect mock mode from order ID or explicit flag
+    if use_mock or is_mock_order(order_id):
+        # Simulate renewal without calling DigiCert
+        mock_result = mock_renewal(order_id, common_name)
+        new_order_id = mock_result["new_order_id"]
+        status = mock_result["status"]
         update_inventory(common_name, order_id, new_order_id, status)
-        return {
-            "statusCode": 500,
-            "body": {
-                "success": False,
-                "error": str(e),
-                "domain": common_name,
-                "order_id": order_id,
-            },
+
+        body = {
+            "success": True,
+            "domain": common_name,
+            "original_order_id": order_id,
+            "new_order_id": new_order_id,
+            "status": status,
+            "message": mock_result["message"],
+            "private_key_stored": True,
+            "csr_generated": True,
         }
+    else:
+        # Real DigiCert renewal
+        api_key = get_digicert_api_key()
+        try:
+            response = submit_renewal(api_key, order_id, csr_pem, common_name)
+            new_order_id = response.get("id", response.get("order_id", "unknown"))
+            status = "submitted"
+        except Exception as e:
+            new_order_id = "failed"
+            status = f"failed: {str(e)}"
+            update_inventory(common_name, order_id, new_order_id, status)
+            return {
+                "statusCode": 500,
+                "body": {
+                    "success": False,
+                    "error": str(e),
+                    "domain": common_name,
+                    "order_id": order_id,
+                },
+            }
 
-    # Update inventory
-    update_inventory(common_name, order_id, str(new_order_id), status)
-
-    return {
-        "statusCode": 200,
-        "body": {
+        body = {
             "success": True,
             "domain": common_name,
             "original_order_id": order_id,
             "new_order_id": str(new_order_id),
             "status": status,
             "message": f"Renewal submitted for {common_name}. Private key stored in Secrets Manager.",
-        },
-    }
+        }
+
+    update_inventory(common_name, order_id, str(new_order_id), status)
+
+    # Bedrock Agent response format
+    if is_agent:
+        return {
+            "messageVersion": "1.0",
+            "response": {
+                "actionGroup": event.get("actionGroup", ""),
+                "function": event.get("function", ""),
+                "functionResponse": {
+                    "responseBody": {
+                        "TEXT": {"body": json.dumps(body)}
+                    }
+                },
+            },
+        }
+
+    return {"statusCode": 200, "body": body}

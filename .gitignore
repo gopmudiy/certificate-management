@@ -19,3 +19,4 @@ Thumbs.db
 
 # Secrets (never commit)
 samconfig.toml
+agentcore/.env.local
