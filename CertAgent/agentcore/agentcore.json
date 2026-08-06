@@ -1,0 +1,65 @@
+{
+  "projectName": "CertAgent",
+  "runtimes": [
+    {
+      "name": "CertAgent",
+      "description": "AI-powered TLS/SSL certificate lifecycle management agent",
+      "codeLocation": "../app/CertAgent",
+      "buildType": "CodeZip",
+      "runtimeVersion": "PYTHON_3_12",
+      "entrypoint": "main.py",
+      "envVars": {
+        "LAMBDA_SCAN": "${LAMBDA_SCAN}",
+        "LAMBDA_RENEW": "${LAMBDA_RENEW}",
+        "LAMBDA_STATUS": "${LAMBDA_STATUS}",
+        "LAMBDA_DOWNLOAD": "${LAMBDA_DOWNLOAD}",
+        "LAMBDA_STORE": "${LAMBDA_STORE}",
+        "LAMBDA_INVENTORY": "${LAMBDA_INVENTORY}",
+        "AWS_REGION": "${AWS_REGION}"
+      }
+    }
+  ],
+  "agentCoreGateways": [
+    {
+      "name": "CertAgentGateway",
+      "targets": [
+        {
+          "name": "scan-certificates",
+          "type": "lambdaFunctionArn",
+          "description": "Scan DigiCert for certificates expiring within a threshold",
+          "lambdaFunctionArn": "${LAMBDA_SCAN_ARN}"
+        },
+        {
+          "name": "renew-certificate",
+          "type": "lambdaFunctionArn",
+          "description": "Generate CSR, store private key, submit renewal to DigiCert",
+          "lambdaFunctionArn": "${LAMBDA_RENEW_ARN}"
+        },
+        {
+          "name": "check-status",
+          "type": "lambdaFunctionArn",
+          "description": "Check the status of a DigiCert renewal order",
+          "lambdaFunctionArn": "${LAMBDA_STATUS_ARN}"
+        },
+        {
+          "name": "download-certificate",
+          "type": "lambdaFunctionArn",
+          "description": "Download issued certificate chain from DigiCert",
+          "lambdaFunctionArn": "${LAMBDA_DOWNLOAD_ARN}"
+        },
+        {
+          "name": "store-certificate",
+          "type": "lambdaFunctionArn",
+          "description": "Store a certificate bundle manually in Secrets Manager",
+          "lambdaFunctionArn": "${LAMBDA_STORE_ARN}"
+        },
+        {
+          "name": "list-inventory",
+          "type": "lambdaFunctionArn",
+          "description": "List certificate inventory from DynamoDB with optional status filter",
+          "lambdaFunctionArn": "${LAMBDA_INVENTORY_ARN}"
+        }
+      ]
+    }
+  ]
+}
