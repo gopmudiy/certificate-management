@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CertAgent Workshop — Master Stack
+  One-click deployment: provisions all application infrastructure, then
+  creates a SageMaker Domain with a JupyterLab space. The space runs a
+  lifecycle config on startup that clones the workshop notebooks from GitHub
+  and configures them to point at the deployed resources.
+
+  Deploy this template to get the full workshop environment in ~10 minutes.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Workshop Settings
+        Parameters:
+          - WorkshopPrefix
+          - NotificationEmail
+      - Label:
+          default: Notebooks Repository
+        Parameters:
+          - NotebooksRepoUrl
+          - NotebooksBranch
+      - Label:
+          default: Network
+        Parameters:
+          - VpcId
+          - SubnetIds
+      - Label:
+          default: Lambda Deployment Package
+        Parameters:
+          - LambdaCodeBucket
+          - LambdaCodeKey
+      - Label:
+          default: DigiCert (Optional)
+        Parameters:
+          - DigiCertBaseUrl
+          - ExpiryThresholdDays
+    ParameterLabels:
+      WorkshopPrefix:
+        default: Resource Name Prefix
+      NotificationEmail:
+        default: Alert Email Address
+      NotebooksRepoUrl:
+        default: Notebooks Git Repository URL
+      NotebooksBranch:
+        default: Git Branch
+      VpcId:
+        default: VPC
+      SubnetIds:
+        default: Subnets
+      LambdaCodeBucket:
+        default: Lambda Package S3 Bucket
+      LambdaCodeKey:
+        default: Lambda Package S3 Key
+
+Parameters:
+  WorkshopPrefix:
+    Type: String
+    Default: certagent
+    AllowedPattern: '[a-z][a-z0-9-]{2,20}'
+    ConstraintDescription: Lowercase letters, numbers, hyphens. 3-20 chars. Must start with a letter.
+    Description: Prefix for all resource names (e.g. certagent)
+
+  NotebooksRepoUrl:
+    Type: String
+    Default: https://github.com/gopmudiy/certificate-management.git
+    Description: Public GitHub repository containing the workshop notebooks
+
+  NotebooksBranch:
+    Type: String
+    Default: main
+    Description: Git branch to clone
+
+  NotificationEmail:
+    Type: String
+    Default: ''
+    Description: Optional — email address to receive SNS certificate expiry alerts
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the SageMaker domain
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the SageMaker domain (choose subnets with internet access)
+
+  LambdaCodeBucket:
+    Type: String
+    Description: >
+      S3 bucket containing the Lambda deployment package.
+      Run scripts/package_lambdas.sh to build and upload this package.
+
+  LambdaCodeKey:
+    Type: String
+    Default: certagent/lambda-packages/certagent.zip
+    Description: S3 key for the Lambda zip package
+
+  DigiCertBaseUrl:
+    Type: String
+    Default: https://www.digicert.com/services/v2
+    Description: DigiCert API URL (leave default for mock mode)
+
+  ExpiryThresholdDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: Scan threshold — alert when certs expire within this many days
+
+  TemplatesBucket:
+    Type: String
+    Description: S3 bucket hosting the nested CF templates (workshop-infra.yaml, sagemaker-domain.yaml)
+
+  TemplatesPrefix:
+    Type: String
+    Default: certagent/cfn
+    Description: S3 key prefix where the nested templates are stored
+
+Resources:
+
+  # ── Nested Stack 1: Application Infrastructure ───────────────────────────
+  InfraStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::URLSuffix}/${TemplatesPrefix}/workshop-infra.yaml'
+      TimeoutInMinutes: 20
+      Parameters:
+        WorkshopPrefix:       !Ref WorkshopPrefix
+        ExpiryThresholdDays:  !Ref ExpiryThresholdDays
+        DigiCertBaseUrl:      !Ref DigiCertBaseUrl
+        NotificationEmail:    !Ref NotificationEmail
+        LambdaCodeBucket:     !Ref LambdaCodeBucket
+        LambdaCodeKey:        !Ref LambdaCodeKey
+      Tags:
+        - Key: workshop
+          Value: !Ref WorkshopPrefix
+
+  # ── Nested Stack 2: SageMaker Domain & JupyterLab Space ──────────────────
+  SageMakerStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: InfraStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucket}.s3.${AWS::URLSuffix}/${TemplatesPrefix}/sagemaker-domain.yaml'
+      TimeoutInMinutes: 30
+      Parameters:
+        WorkshopPrefix:    !Ref WorkshopPrefix
+        NotebooksRepoUrl:  !Ref NotebooksRepoUrl
+        NotebooksBranch:   !Ref NotebooksBranch
+        InfraStackName:    !GetAtt InfraStack.Outputs.CertTableName
+        VpcId:             !Ref VpcId
+        SubnetIds:         !Join [',', !Ref SubnetIds]
+      Tags:
+        - Key: workshop
+          Value: !Ref WorkshopPrefix
+
+Outputs:
+  # ── Instructions ──────────────────────────────────────────────────────────
+  Step1:
+    Description: '1. Wait for this stack to reach CREATE_COMPLETE (~10 min)'
+    Value: 'Stack deployment in progress...'
+
+  Step2:
+    Description: '2. Open SageMaker Studio at this URL'
+    Value: !GetAtt SageMakerStack.Outputs.DomainUrl
+
+  Step3:
+    Description: '3. Open the certagent-workshop space and launch JupyterLab'
+    Value: !Sub 'Space name: ${WorkshopPrefix}-lab'
+
+  Step4:
+    Description: '4. Notebooks are in ~/certagent-notebooks/ — start with 01_explore_lambdas.ipynb'
+    Value: 'No setup required — the environment is ready to use'
+
+  # ── Resource References ───────────────────────────────────────────────────
+  DomainId:
+    Value: !GetAtt SageMakerStack.Outputs.DomainId
+    Description: SageMaker Domain ID
+
+  DomainUrl:
+    Value: !GetAtt SageMakerStack.Outputs.DomainUrl
+    Description: SageMaker Studio URL — bookmark this
+
+  CertInventoryTable:
+    Value: !GetAtt InfraStack.Outputs.CertTableName
+    Description: DynamoDB certificate inventory table name
+
+  SNSTopicArn:
+    Value: !GetAtt InfraStack.Outputs.SNSTopicArn
+    Description: SNS topic for certificate expiry alerts
+
+  SlackEventUrl:
+    Value: !GetAtt InfraStack.Outputs.SlackEventUrl
+    Description: Configure this URL in Slack Event Subscriptions
+
+  LambdaScanArn:
+    Value: !GetAtt InfraStack.Outputs.LambdaScanArn
+    Description: Scan certificates Lambda function ARN

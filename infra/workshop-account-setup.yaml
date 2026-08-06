@@ -1,0 +1,512 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CertAgent Workshop — Full Account Setup (Workshop Studio Auto-Deploy)
+  Deploys everything into a fresh account: VPC, SageMaker Domain + Space,
+  Lambda functions, DynamoDB, SNS, EventBridge, Secrets Manager.
+  The SageMaker lifecycle config auto-clones the notebooks from GitHub.
+
+  This template is deployed automatically by Workshop Studio when a
+  participant account is provisioned.
+
+Parameters:
+  WorkshopPrefix:
+    Type: String
+    Default: certagent
+
+  NotebooksRepoUrl:
+    Type: String
+    Default: https://github.com/gopmudiy/certificate-management.git
+
+  NotebooksBranch:
+    Type: String
+    Default: main
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    MemorySize: 256
+    Environment:
+      Variables:
+        DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+        CERT_TABLE_NAME: !Ref CertInventoryTable
+        CERT_SECRETS_PREFIX: !Sub '/${WorkshopPrefix}/certs'
+        NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
+        DIGICERT_BASE_URL: https://www.digicert.com/services/v2
+        EXPIRY_THRESHOLD_DAYS: '30'
+
+Resources:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NETWORKING
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${WorkshopPrefix}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${WorkshopPrefix}-public-1'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${WorkshopPrefix}-public-2'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # APPLICATION INFRASTRUCTURE
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  CertInventoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${WorkshopPrefix}-inventory'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: domain
+          AttributeType: S
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: domain
+          KeyType: HASH
+        - AttributeName: order_id
+          KeyType: RANGE
+
+  DigiCertApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/${WorkshopPrefix}/digicert-api-key'
+      SecretString: '{"api_key": "WORKSHOP_MOCK_KEY_NOT_REAL"}'
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${WorkshopPrefix}-notifications'
+
+  # ── Lambda Functions (SAM) ──────────────────────────────────────────────
+
+  ScanCertificatesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-scan-certificates'
+      CodeUri: ../lambdas/scan_certificates/
+      Handler: handler.lambda_handler
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CertInventoryTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+
+  RenewCertificateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-renew-certificate'
+      CodeUri: ../lambdas/renew_certificate/
+      Handler: handler.lambda_handler
+      Timeout: 120
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CertInventoryTable
+
+  CheckStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-check-status'
+      CodeUri: ../lambdas/check_status/
+      Handler: handler.lambda_handler
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CertInventoryTable
+
+  DownloadCertificateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-download-certificate'
+      CodeUri: ../lambdas/download_certificate/
+      Handler: handler.lambda_handler
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CertInventoryTable
+
+  StoreCertificateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-store-certificate'
+      CodeUri: ../lambdas/store_certificate/
+      Handler: handler.lambda_handler
+      Policies:
+        - SecretsManagerReadWrite
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CertInventoryTable
+
+  ListInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-list-inventory'
+      CodeUri: ../lambdas/list_inventory/
+      Handler: handler.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref CertInventoryTable
+
+  SlackHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-slack-handler'
+      CodeUri: ../slack/
+      Handler: slack_handler.lambda_handler
+      Timeout: 120
+      Environment:
+        Variables:
+          BEDROCK_AGENT_ID: PLACEHOLDER
+          BEDROCK_AGENT_ALIAS_ID: PLACEHOLDER
+      Policies:
+        - SecretsManagerReadWrite
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeAgent
+              Resource: '*'
+      Events:
+        SlackEvent:
+          Type: Api
+          Properties:
+            Path: /slack/events
+            Method: post
+
+  # ── EventBridge daily scan ───────────────────────────────────────────────
+
+  DailyScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${WorkshopPrefix}-daily-scan'
+      ScheduleExpression: cron(0 8 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ScanCertificatesFunction.Arn
+          Id: DailyScan
+          Input: '{"source": "aws.events", "use_mock": true}'
+
+  DailyScanPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScanCertificatesFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyScanRule.Arn
+
+  # ── SSM Parameters (notebook config) ────────────────────────────────────
+
+  SSMRegion:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/region'
+      Type: String
+      Value: !Ref AWS::Region
+
+  SSMCertTable:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/cert-table-name'
+      Type: String
+      Value: !Ref CertInventoryTable
+
+  SSMDigiCertSecret:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/digicert-secret-arn'
+      Type: String
+      Value: !Ref DigiCertApiKeySecret
+
+  SSMSNSTopic:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/sns-topic-arn'
+      Type: String
+      Value: !Ref NotificationTopic
+
+  SSMLambdaScan:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-scan'
+      Type: String
+      Value: !Ref ScanCertificatesFunction
+
+  SSMLambdaRenew:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-renew'
+      Type: String
+      Value: !Ref RenewCertificateFunction
+
+  SSMLambdaStatus:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-status'
+      Type: String
+      Value: !Ref CheckStatusFunction
+
+  SSMLambdaDownload:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-download'
+      Type: String
+      Value: !Ref DownloadCertificateFunction
+
+  SSMLambdaStore:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-store'
+      Type: String
+      Value: !Ref StoreCertificateFunction
+
+  SSMLambdaInventory:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-inventory'
+      Type: String
+      Value: !Ref ListInventoryFunction
+
+  SSMSecretsPrefix:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/cert-secrets-prefix'
+      Type: String
+      Value: !Sub '/${WorkshopPrefix}/certs'
+
+  SSMWorkshopPrefix:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/prefix'
+      Type: String
+      Value: !Ref WorkshopPrefix
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SAGEMAKER
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopPrefix}-sagemaker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      Policies:
+        - PolicyName: WorkshopPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${WorkshopPrefix}-*'
+              - Effect: Allow
+                Action: [dynamodb:Scan, dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
+                Resource: !GetAtt CertInventoryTable.Arn
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:PutSecretValue,
+                         secretsmanager:CreateSecret, secretsmanager:ListSecrets, secretsmanager:DeleteSecret]
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${WorkshopPrefix}/*'
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/workshop/${WorkshopPrefix}/*'
+              - Effect: Allow
+                Action: [bedrock:*, bedrock-agent:*]
+                Resource: '*'
+              - Effect: Allow
+                Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:PutRolePolicy,
+                         iam:DeleteRolePolicy, iam:PassRole]
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${WorkshopPrefix}*'
+              - Effect: Allow
+                Action: [sns:ListTopics, sns:Subscribe, sns:Publish]
+                Resource: '*'
+              - Effect: Allow
+                Action: [events:DescribeRule, events:ListTargetsByRule]
+                Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${WorkshopPrefix}-*'
+
+  LifecycleConfig:
+    Type: AWS::SageMaker::StudioLifecycleConfig
+    Properties:
+      StudioLifecycleConfigName: !Sub '${WorkshopPrefix}-on-start'
+      StudioLifecycleConfigAppType: JupyterLab
+      StudioLifecycleConfigContent:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -eux
+          REGION="${AWS::Region}"
+          PREFIX="${WorkshopPrefix}"
+          REPO="${NotebooksRepoUrl}"
+          BRANCH="${NotebooksBranch}"
+          DIR="/home/sagemaker-user/certagent-workshop"
+
+          # Install deps
+          pip install -q "cryptography>=42.0.0" "pydantic>=2.0.0" "pyyaml>=6.0.0" "tabulate>=0.9.0" "boto3>=1.35.0"
+
+          # Clone or update repo
+          if [ -d "$DIR/.git" ]; then
+            git -C "$DIR" pull --rebase origin "$BRANCH" || true
+          else
+            git clone --branch "$BRANCH" --depth 1 "$REPO" "$DIR"
+          fi
+
+          # Write config from SSM
+          P="/workshop/$PREFIX"
+          get() { aws ssm get-parameter --region "$REGION" --name "$P/$1" --query 'Parameter.Value' --output text 2>/dev/null || echo ""; }
+          cat > /tmp/certagent_config.json <<EOF
+          {
+            "AWS_REGION": "$REGION",
+            "WORKSHOP_PREFIX": "$PREFIX",
+            "CERT_TABLE_NAME": "$(get cert-table-name)",
+            "DIGICERT_SECRET_ARN": "$(get digicert-secret-arn)",
+            "CERT_SECRETS_PREFIX": "$(get cert-secrets-prefix)",
+            "SNS_TOPIC_ARN": "$(get sns-topic-arn)",
+            "LAMBDA_SCAN": "$(get lambda-scan)",
+            "LAMBDA_RENEW": "$(get lambda-renew)",
+            "LAMBDA_STATUS": "$(get lambda-status)",
+            "LAMBDA_DOWNLOAD": "$(get lambda-download)",
+            "LAMBDA_STORE": "$(get lambda-store)",
+            "LAMBDA_INVENTORY": "$(get lambda-inventory)",
+            "REPO_DIR": "$DIR"
+          }
+          EOF
+
+          # Copy notebooks to home for easy JupyterLab access
+          cp -r "$DIR/notebooks" /home/sagemaker-user/certagent-notebooks 2>/dev/null || true
+          echo "=== CertAgent workshop ready ==="
+
+  SageMakerDomain:
+    Type: AWS::SageMaker::Domain
+    Properties:
+      DomainName: !Sub '${WorkshopPrefix}-domain'
+      AuthMode: IAM
+      VpcId: !Ref VPC
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      DefaultUserSettings:
+        ExecutionRole: !GetAtt SageMakerExecutionRole.Arn
+
+  UserProfile:
+    Type: AWS::SageMaker::UserProfile
+    Properties:
+      DomainId: !Ref SageMakerDomain
+      UserProfileName: !Sub '${WorkshopPrefix}-participant'
+      UserSettings:
+        ExecutionRole: !GetAtt SageMakerExecutionRole.Arn
+        JupyterLabAppSettings:
+          LifecycleConfigArns:
+            - !GetAtt LifecycleConfig.StudioLifecycleConfigArn
+          DefaultResourceSpec:
+            InstanceType: ml.t3.medium
+            LifecycleConfigArn: !GetAtt LifecycleConfig.StudioLifecycleConfigArn
+
+  JupyterSpace:
+    Type: AWS::SageMaker::Space
+    DependsOn: UserProfile
+    Properties:
+      DomainId: !Ref SageMakerDomain
+      SpaceName: !Sub '${WorkshopPrefix}-lab'
+      OwnershipSettings:
+        OwnerUserProfileName: !Sub '${WorkshopPrefix}-participant'
+      SpaceSettings:
+        AppType: JupyterLab
+        JupyterLabAppSettings:
+          DefaultResourceSpec:
+            InstanceType: ml.t3.medium
+            LifecycleConfigArn: !GetAtt LifecycleConfig.StudioLifecycleConfigArn
+        SpaceStorageSettings:
+          EbsStorageSettings:
+            EbsVolumeSizeInGb: 20
+      SpaceSharingSettings:
+        SharingType: Private
+
+Outputs:
+  SageMakerDomainUrl:
+    Description: Open SageMaker Studio here
+    Value: !Sub 'https://${SageMakerDomain}.studio.${AWS::Region}.sagemaker.aws'
+
+  SpaceName:
+    Description: JupyterLab space name — launch this after opening Studio
+    Value: !Sub '${WorkshopPrefix}-lab'
+
+  Instructions:
+    Description: Getting started
+    Value: |
+      1. Open the SageMaker Studio URL above
+      2. Launch the certagent-lab space
+      3. Open certagent-notebooks/01_explore_lambdas.ipynb
+      4. All infrastructure is already deployed — start the labs immediately
+
+  CertTableName:
+    Value: !Ref CertInventoryTable
+
+  SNSTopicArn:
+    Value: !Ref NotificationTopic
+
+  SlackEventUrl:
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/slack/events'

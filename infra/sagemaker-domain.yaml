@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CertAgent Workshop — SageMaker Domain & JupyterLab Space
+  Creates a SageMaker Domain with a JupyterLab space. A lifecycle config
+  script runs on space startup: it installs dependencies, clones the workshop
+  notebooks from GitHub, and writes the workshop config so notebooks run immediately.
+
+Parameters:
+  WorkshopPrefix:
+    Type: String
+    Default: certagent
+
+  NotebooksRepoUrl:
+    Type: String
+    Default: https://github.com/gopmudiy/certificate-management.git
+    Description: Git repository containing the workshop notebooks
+
+  NotebooksBranch:
+    Type: String
+    Default: main
+    Description: Branch to clone
+
+  InfraStackName:
+    Type: String
+    Description: Name of the workshop-infra stack (for cross-stack imports)
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the SageMaker domain
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the SageMaker domain (at least one)
+
+Resources:
+
+  # ── SageMaker Execution Role ─────────────────────────────────────────────
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopPrefix}-sagemaker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      Policies:
+        - PolicyName: WorkshopAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: LambdaInvoke
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${WorkshopPrefix}-*'
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WorkshopPrefix}-inventory'
+              - Sid: SecretsManagerRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:ListSecrets
+                  - secretsmanager:DeleteSecret
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${WorkshopPrefix}/*'
+              - Sid: SSMRead
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/workshop/${WorkshopPrefix}/*'
+              - Sid: BedrockFullAccess
+                Effect: Allow
+                Action:
+                  - bedrock:CreateAgent
+                  - bedrock:DeleteAgent
+                  - bedrock:GetAgent
+                  - bedrock:ListAgents
+                  - bedrock:PrepareAgent
+                  - bedrock:UpdateAgent
+                  - bedrock:CreateAgentAlias
+                  - bedrock:DeleteAgentAlias
+                  - bedrock:GetAgentAlias
+                  - bedrock:ListAgentAliases
+                  - bedrock:CreateAgentActionGroup
+                  - bedrock:UpdateAgentActionGroup
+                  - bedrock:ListAgentActionGroups
+                  - bedrock:InvokeAgent
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListFoundationModels
+                Resource: '*'
+              - Sid: IAMForBedrockRole
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${WorkshopPrefix}*'
+              - Sid: SNSAccess
+                Effect: Allow
+                Action:
+                  - sns:ListTopics
+                  - sns:Subscribe
+                  - sns:ListSubscriptionsByTopic
+                Resource: '*'
+              - Sid: EventBridgeRead
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                  - events:PutRule
+                  - events:DisableRule
+                  - events:EnableRule
+                Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${WorkshopPrefix}-*'
+              - Sid: CloudFormationRead
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ListStacks
+                Resource: '*'
+              - Sid: S3WorkshopBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${WorkshopPrefix}-*'
+                  - !Sub 'arn:aws:s3:::${WorkshopPrefix}-*/*'
+
+  # ── SageMaker Domain ──────────────────────────────────────────────────────
+  SageMakerDomain:
+    Type: AWS::SageMaker::Domain
+    Properties:
+      DomainName: !Sub '${WorkshopPrefix}-workshop-domain'
+      AuthMode: IAM
+      VpcId: !Ref VpcId
+      SubnetIds: !Ref SubnetIds
+      DefaultUserSettings:
+        ExecutionRole: !GetAtt SageMakerExecutionRole.Arn
+        JupyterServerAppSettings:
+          DefaultResourceSpec:
+            InstanceType: system
+        KernelGatewayAppSettings:
+          DefaultResourceSpec:
+            InstanceType: ml.t3.medium
+      DomainSettings:
+        SecurityGroupIds: []
+
+  # ── Lifecycle Configuration ──────────────────────────────────────────────
+  # Runs every time a JupyterLab space starts.
+  # Installs workshop dependencies, clones the notebooks repo,
+  # and writes /tmp/certagent_config.json from SSM so notebooks work immediately.
+  JupyterLifecycleConfig:
+    Type: AWS::SageMaker::StudioLifecycleConfig
+    Properties:
+      StudioLifecycleConfigName: !Sub '${WorkshopPrefix}-on-start'
+      StudioLifecycleConfigAppType: JupyterLab
+      StudioLifecycleConfigContent:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -eux
+
+          WORKSHOP_PREFIX="${WorkshopPrefix}"
+          REPO_URL="${NotebooksRepoUrl}"
+          REPO_BRANCH="${NotebooksBranch}"
+          NOTEBOOKS_DIR="/home/sagemaker-user/certagent-workshop"
+          REGION="${AWS::Region}"
+
+          echo "=== CertAgent Workshop Lifecycle Config ==="
+          echo "Region  : $REGION"
+          echo "Repo    : $REPO_URL ($REPO_BRANCH)"
+
+          # ── 1. Install Python dependencies ──────────────────────────────
+          echo "Installing dependencies..."
+          pip install -q --upgrade pip
+          pip install -q \
+            "cryptography>=42.0.0" \
+            "aws-lambda-powertools>=3.0.0" \
+            "pydantic>=2.0.0" \
+            "pyyaml>=6.0.0" \
+            "tabulate>=0.9.0" \
+            "boto3>=1.35.0"
+
+          # ── 2. Clone / update the workshop repo ─────────────────────────
+          if [ -d "$NOTEBOOKS_DIR/.git" ]; then
+            echo "Repository already present — pulling latest..."
+            git -C "$NOTEBOOKS_DIR" pull --rebase origin "$REPO_BRANCH" || true
+          else
+            echo "Cloning workshop repository..."
+            git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$NOTEBOOKS_DIR"
+          fi
+
+          # ── 3. Read config from SSM and write /tmp/certagent_config.json ─
+          echo "Reading workshop config from SSM..."
+          SSM_PREFIX="/workshop/$WORKSHOP_PREFIX"
+
+          get_param() {
+            aws ssm get-parameter --region "$REGION" \
+              --name "$SSM_PREFIX/$1" \
+              --query 'Parameter.Value' \
+              --output text 2>/dev/null || echo "NOT_FOUND"
+          }
+
+          cat > /tmp/certagent_config.json <<CONFIG
+          {
+            "AWS_REGION":            "$REGION",
+            "WORKSHOP_PREFIX":       "$WORKSHOP_PREFIX",
+            "CERT_TABLE_NAME":       "$(get_param cert-table-name)",
+            "DIGICERT_SECRET_ARN":   "$(get_param digicert-secret-arn)",
+            "CERT_SECRETS_PREFIX":   "$(get_param cert-secrets-prefix)",
+            "SNS_TOPIC_ARN":         "$(get_param sns-topic-arn)",
+            "LAMBDA_SCAN":           "$(get_param lambda-scan)",
+            "LAMBDA_RENEW":          "$(get_param lambda-renew)",
+            "LAMBDA_STATUS":         "$(get_param lambda-status)",
+            "LAMBDA_DOWNLOAD":       "$(get_param lambda-download)",
+            "LAMBDA_STORE":          "$(get_param lambda-store)",
+            "LAMBDA_INVENTORY":      "$(get_param lambda-inventory)",
+            "REPO_DIR":              "$NOTEBOOKS_DIR"
+          }
+          CONFIG
+
+          echo "Config written to /tmp/certagent_config.json"
+          cat /tmp/certagent_config.json
+
+          # ── 4. Create a symlink in the default home dir for easy access ──
+          ln -sfn "$NOTEBOOKS_DIR/notebooks" \
+            /home/sagemaker-user/certagent-notebooks 2>/dev/null || true
+
+          echo "=== Lifecycle config complete ==="
+          echo "Open certagent-notebooks/ in the file browser to start"
+
+  # ── User Profile ─────────────────────────────────────────────────────────
+  WorkshopUserProfile:
+    Type: AWS::SageMaker::UserProfile
+    Properties:
+      DomainId: !Ref SageMakerDomain
+      UserProfileName: !Sub '${WorkshopPrefix}-participant'
+      UserSettings:
+        ExecutionRole: !GetAtt SageMakerExecutionRole.Arn
+        JupyterLabAppSettings:
+          LifecycleConfigArns:
+            - !Sub >-
+              arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:studio-lifecycle-config/${WorkshopPrefix}-on-start
+          DefaultResourceSpec:
+            InstanceType: ml.t3.medium
+            LifecycleConfigArn: !Sub >-
+              arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:studio-lifecycle-config/${WorkshopPrefix}-on-start
+
+  # ── JupyterLab Space ──────────────────────────────────────────────────────
+  WorkshopJupyterSpace:
+    Type: AWS::SageMaker::Space
+    DependsOn: WorkshopUserProfile
+    Properties:
+      DomainId: !Ref SageMakerDomain
+      SpaceName: !Sub '${WorkshopPrefix}-lab'
+      OwnershipSettings:
+        OwnerUserProfileName: !Sub '${WorkshopPrefix}-participant'
+      SpaceSettings:
+        AppType: JupyterLab
+        JupyterLabAppSettings:
+          DefaultResourceSpec:
+            InstanceType: ml.t3.medium
+            LifecycleConfigArn: !Sub >-
+              arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:studio-lifecycle-config/${WorkshopPrefix}-on-start
+        SpaceStorageSettings:
+          EbsStorageSettings:
+            EbsVolumeSizeInGb: 20
+      SpaceSharingSettings:
+        SharingType: Private
+
+Outputs:
+  DomainId:
+    Value: !Ref SageMakerDomain
+    Description: SageMaker Domain ID
+
+  DomainUrl:
+    Value: !Sub 'https://${SageMakerDomain}.studio.${AWS::Region}.sagemaker.aws'
+    Description: SageMaker Studio URL
+
+  UserProfileName:
+    Value: !GetAtt WorkshopUserProfile.UserProfileName
+    Description: SageMaker user profile name
+
+  SpaceName:
+    Value: !GetAtt WorkshopJupyterSpace.SpaceName
+    Description: JupyterLab space name
+
+  ExecutionRoleArn:
+    Value: !GetAtt SageMakerExecutionRole.Arn
+    Description: SageMaker execution role ARN

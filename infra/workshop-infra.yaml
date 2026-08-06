@@ -1,0 +1,448 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CertAgent Workshop — Application Infrastructure
+  Deploys all Lambda functions, DynamoDB, SNS, EventBridge, Secrets Manager,
+  and S3 bucket. Outputs are stored in SSM Parameter Store for notebook consumption.
+
+Parameters:
+  WorkshopPrefix:
+    Type: String
+    Default: certagent
+    Description: Prefix applied to all resource names
+
+  ExpiryThresholdDays:
+    Type: Number
+    Default: 30
+    Description: Alert when certs expire within this many days
+
+  DigiCertBaseUrl:
+    Type: String
+    Default: https://www.digicert.com/services/v2
+    Description: DigiCert CertCentral API base URL
+
+  NotificationEmail:
+    Type: String
+    Default: ''
+    Description: Optional email address for SNS expiry alerts
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment packages
+
+  LambdaCodeKey:
+    Type: String
+    Default: lambda-packages/certagent.zip
+    Description: S3 key for the Lambda deployment package
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+
+Globals:
+  # Note: Globals block is SAM-only. For plain CF we set these per function.
+
+Resources:
+
+  # ── DynamoDB ────────────────────────────────────────────────────────────────
+  CertInventoryTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub '${WorkshopPrefix}-inventory'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: domain
+          AttributeType: S
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: domain
+          KeyType: HASH
+        - AttributeName: order_id
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
+  # ── Secrets Manager ─────────────────────────────────────────────────────────
+  DigiCertApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/${WorkshopPrefix}/digicert-api-key'
+      Description: DigiCert CertCentral API key — replace with real key for production
+      SecretString: '{"api_key": "WORKSHOP_MOCK_KEY_NOT_REAL"}'
+
+  # ── SNS ─────────────────────────────────────────────────────────────────────
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${WorkshopPrefix}-notifications'
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      TopicArn: !Ref NotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # ── IAM Role for Lambda ──────────────────────────────────────────────────────
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${WorkshopPrefix}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CertAgentLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: !GetAtt CertInventoryTable.Arn
+              - Sid: SecretsManagerAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DescribeSecret
+                Resource:
+                  - !Ref DigiCertApiKeySecret
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${WorkshopPrefix}/certs/*'
+              - Sid: SNSPublish
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref NotificationTopic
+              - Sid: BedrockAgentInvoke
+                Effect: Allow
+                Action: bedrock:InvokeAgent
+                Resource: '*'
+
+  # ── Lambda: scan_certificates ─────────────────────────────────────────────
+  ScanCertificatesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-scan-certificates'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Sub '${LambdaCodeKey}'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+          CERT_SECRETS_PREFIX: !Sub '/${WorkshopPrefix}/certs'
+          NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
+          DIGICERT_BASE_URL: !Ref DigiCertBaseUrl
+          EXPIRY_THRESHOLD_DAYS: !Sub '${ExpiryThresholdDays}'
+
+  # ── Lambda: renew_certificate ─────────────────────────────────────────────
+  RenewCertificateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-renew-certificate'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+          CERT_SECRETS_PREFIX: !Sub '/${WorkshopPrefix}/certs'
+          DIGICERT_BASE_URL: !Ref DigiCertBaseUrl
+
+  # ── Lambda: check_status ──────────────────────────────────────────────────
+  CheckStatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-check-status'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+          DIGICERT_BASE_URL: !Ref DigiCertBaseUrl
+
+  # ── Lambda: download_certificate ─────────────────────────────────────────
+  DownloadCertificateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-download-certificate'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+          CERT_SECRETS_PREFIX: !Sub '/${WorkshopPrefix}/certs'
+          DIGICERT_BASE_URL: !Ref DigiCertBaseUrl
+
+  # ── Lambda: store_certificate ─────────────────────────────────────────────
+  StoreCertificateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-store-certificate'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          DIGICERT_API_SECRET_ARN: !Ref DigiCertApiKeySecret
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+          CERT_SECRETS_PREFIX: !Sub '/${WorkshopPrefix}/certs'
+
+  # ── Lambda: list_inventory ────────────────────────────────────────────────
+  ListInventoryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-list-inventory'
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          CERT_TABLE_NAME: !Ref CertInventoryTable
+
+  # ── Lambda: slack_handler ─────────────────────────────────────────────────
+  SlackHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${WorkshopPrefix}-slack-handler'
+      Runtime: python3.12
+      Handler: slack_handler.lambda_handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          BEDROCK_AGENT_ID: PLACEHOLDER
+          BEDROCK_AGENT_ALIAS_ID: PLACEHOLDER
+
+  # ── API Gateway for Slack handler ─────────────────────────────────────────
+  SlackApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${WorkshopPrefix}-slack-api'
+      Description: Slack event endpoint for CertAgent
+
+  SlackApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SlackApi
+      ParentId: !GetAtt SlackApi.RootResourceId
+      PathPart: events
+
+  SlackApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SlackApi
+      ResourceId: !Ref SlackApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FnArn}/invocations'
+          - FnArn: !GetAtt SlackHandlerFunction.Arn
+
+  SlackApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: SlackApiMethod
+    Properties:
+      RestApiId: !Ref SlackApi
+      StageName: Prod
+
+  SlackApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SlackHandlerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SlackApi}/*'
+
+  # ── EventBridge daily scan ────────────────────────────────────────────────
+  DailyScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${WorkshopPrefix}-daily-scan'
+      Description: Trigger daily certificate expiry scan at 8 AM UTC
+      ScheduleExpression: cron(0 8 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ScanCertificatesFunction.Arn
+          Id: DailyScan
+          Input: '{"source": "aws.events"}'
+
+  DailyScanPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScanCertificatesFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyScanRule.Arn
+
+  # ── SSM Parameters (consumed by notebooks) ───────────────────────────────
+  SSMRegion:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/region'
+      Type: String
+      Value: !Ref AWS::Region
+
+  SSMCertTableName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/cert-table-name'
+      Type: String
+      Value: !Ref CertInventoryTable
+
+  SSMDigiCertSecretArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/digicert-secret-arn'
+      Type: String
+      Value: !Ref DigiCertApiKeySecret
+
+  SSMSNSTopicArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/sns-topic-arn'
+      Type: String
+      Value: !Ref NotificationTopic
+
+  SSMLambdaScan:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-scan'
+      Type: String
+      Value: !Ref ScanCertificatesFunction
+
+  SSMLambdaRenew:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-renew'
+      Type: String
+      Value: !Ref RenewCertificateFunction
+
+  SSMLambdaStatus:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-status'
+      Type: String
+      Value: !Ref CheckStatusFunction
+
+  SSMLambdaDownload:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-download'
+      Type: String
+      Value: !Ref DownloadCertificateFunction
+
+  SSMLambdaStore:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-store'
+      Type: String
+      Value: !Ref StoreCertificateFunction
+
+  SSMLambdaInventory:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/lambda-inventory'
+      Type: String
+      Value: !Ref ListInventoryFunction
+
+  SSMCertSecretsPrefix:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/workshop/${WorkshopPrefix}/cert-secrets-prefix'
+      Type: String
+      Value: !Sub '/${WorkshopPrefix}/certs'
+
+Outputs:
+  CertTableName:
+    Value: !Ref CertInventoryTable
+    Export:
+      Name: !Sub '${AWS::StackName}-CertTableName'
+
+  DigiCertSecretArn:
+    Value: !Ref DigiCertApiKeySecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DigiCertSecretArn'
+
+  SNSTopicArn:
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicArn'
+
+  LambdaScanArn:
+    Value: !GetAtt ScanCertificatesFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaScanArn'
+
+  LambdaRenewArn:
+    Value: !GetAtt RenewCertificateFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaRenewArn'
+
+  SlackEventUrl:
+    Value: !Sub 'https://${SlackApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/events'
+    Description: Configure this URL in Slack Event Subscriptions
+
+  LambdaExecutionRoleArn:
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaRoleArn'
