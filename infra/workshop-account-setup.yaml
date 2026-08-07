@@ -468,8 +468,8 @@ Resources:
           }
           EOF
 
-          # Copy notebooks to home for easy JupyterLab access
-          cp -r "$DIR/notebooks" /home/sagemaker-user/certagent-notebooks 2>/dev/null || true
+          # Copy notebooks directly to home directory so they appear at top of file browser
+          cp "$DIR/notebooks/"*.ipynb /home/sagemaker-user/ 2>/dev/null || true
           echo "=== CertAgent workshop ready ==="
 
   SageMakerDomain:
