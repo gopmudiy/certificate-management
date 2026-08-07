@@ -470,6 +470,15 @@ Resources:
 
           # Copy notebooks directly to home directory so they appear at top of file browser
           cp "$DIR/notebooks/"*.ipynb /home/sagemaker-user/ 2>/dev/null || true
+
+          # Clean up dot folders created by pip/npm that clutter the file browser
+          rm -rf /home/sagemaker-user/.agent 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.cache 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.claude 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.kiro 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.local 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.npm 2>/dev/null || true
+
           echo "=== CertAgent workshop ready ==="
 
   SageMakerDomain:
