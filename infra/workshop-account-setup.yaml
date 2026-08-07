@@ -468,38 +468,10 @@ Resources:
           }
           EOF
 
-          # Write a tiny setup notebook that participants double-click first
-          # This notebook copies the real notebooks with proper JupyterLab metadata
-          python3 << 'PYSCRIPT'
-import json, os
-
-setup_nb = {
-    "cells": [
-        {"cell_type": "markdown", "id": "setup1", "metadata": {},
-         "source": ["# CertAgent Workshop Setup\n", "Run this cell once, then open the lab notebooks."]},
-        {"cell_type": "code", "id": "setup2", "metadata": {}, "execution_count": None, "outputs": [],
-         "source": [
-             "import json, os\n",
-             "src = os.path.expanduser('~/certagent-workshop/notebooks')\n",
-             "dst = os.path.expanduser('~')\n",
-             "for f in sorted(os.listdir(src)):\n",
-             "    if f.endswith('.ipynb'):\n",
-             "        nb = json.load(open(os.path.join(src, f)))\n",
-             "        with open(os.path.join(dst, f), 'w') as out:\n",
-             "            json.dump(nb, out, indent=1)\n",
-             "        print(f'Ready: {f}')\n",
-             "print('\\nAll notebooks ready. Open them from the file browser.')"
-         ]}
-    ],
-    "metadata": {"kernelspec": {"display_name": "Python 3 (ipykernel)", "language": "python", "name": "python3"},
-                 "language_info": {"name": "python", "version": "3.12.0"}},
-    "nbformat": 4, "nbformat_minor": 5
-}
-with open('/home/sagemaker-user/START_HERE.ipynb', 'w') as f:
-    json.dump(setup_nb, f, indent=1)
-print("Created START_HERE.ipynb")
-PYSCRIPT
-
+          # Notebooks are served directly from the git clone path
+          # Do NOT copy - JupyterLab file ID tracking breaks on copied files
+          # Participants open from: certagent-workshop/notebooks/
+          
           # Clean up dot folders created by pip that clutter the file browser
           rm -rf /home/sagemaker-user/.agent 2>/dev/null || true
           rm -rf /home/sagemaker-user/.cache 2>/dev/null || true
@@ -509,7 +481,7 @@ PYSCRIPT
           rm -rf /home/sagemaker-user/.npm 2>/dev/null || true
 
           echo "=== CertAgent workshop ready ==="
-          echo "Open START_HERE.ipynb and run it to set up lab notebooks"
+          echo "Open notebooks from: certagent-workshop/notebooks/"
 
   SageMakerDomain:
     Type: AWS::SageMaker::Domain
