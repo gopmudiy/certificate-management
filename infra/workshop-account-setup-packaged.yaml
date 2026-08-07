@@ -14,7 +14,7 @@ Parameters:
     Default: https://github.com/gopmudiy/certificate-management.git
   NotebooksBranch:
     Type: String
-    Default: main
+    Default: workshop-notebooks
 Globals:
   Function:
     Runtime: python3.12
