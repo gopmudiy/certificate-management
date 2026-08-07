@@ -120,7 +120,7 @@ def list_inventory(status: str = "all") -> str:
 # ── Agent setup ──────────────────────────────────────────────────────────────
 
 model = BedrockModel(
-    model_id="us.anthropic.claude-sonnet-4-5-20250514-v1:0",
+    model_id="anthropic.claude-sonnet-4-5-20250929-v1:0",
     region_name=AWS_REGION
 )
 
