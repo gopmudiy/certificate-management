@@ -20,7 +20,7 @@ Parameters:
 
   NotebooksBranch:
     Type: String
-    Default: main
+    Default: workshop-notebooks
 
 Globals:
   Function:
