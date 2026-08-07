@@ -444,7 +444,9 @@ Resources:
           if [ -d "$DIR/.git" ]; then
             git -C "$DIR" pull --rebase origin "$BRANCH" || true
           else
-            git clone --branch "$BRANCH" --depth 1 "$REPO" "$DIR"
+            git clone --branch "$BRANCH" "$REPO" "$DIR"
+            # Remove .git so JupyterLab uses standard file tracking (not git-based)
+            rm -rf "$DIR/.git"
           fi
 
           # Write config from SSM
