@@ -468,13 +468,22 @@ Resources:
           }
           EOF
 
-          # Copy notebooks directly to home directory so they appear at top of file browser
-          # Use --no-preserve to avoid JupyterLab file ID tracking issues
-          for nb in "$DIR/notebooks/"*.ipynb; do
-            cp --no-preserve=all "$nb" /home/sagemaker-user/ 2>/dev/null || cp "$nb" /home/sagemaker-user/
-          done
+          # Write notebooks fresh using Python to create proper file metadata
+          # (avoids JupyterLab file ID tracking bug with git-cloned files)
+          python3 -c "
+import json, os, shutil
+src = '$DIR/notebooks'
+dst = '/home/sagemaker-user/notebooks'
+os.makedirs(dst, exist_ok=True)
+for f in os.listdir(src):
+    if f.endswith('.ipynb'):
+        nb = json.load(open(os.path.join(src, f)))
+        with open(os.path.join(dst, f), 'w') as out:
+            json.dump(nb, out, indent=1)
+        print(f'Written: {f}')
+"
 
-          # Clean up dot folders created by pip/npm that clutter the file browser
+          # Clean up dot folders created by pip that clutter the file browser
           rm -rf /home/sagemaker-user/.agent 2>/dev/null || true
           rm -rf /home/sagemaker-user/.cache 2>/dev/null || true
           rm -rf /home/sagemaker-user/.claude 2>/dev/null || true
@@ -483,6 +492,7 @@ Resources:
           rm -rf /home/sagemaker-user/.npm 2>/dev/null || true
 
           echo "=== CertAgent workshop ready ==="
+          echo "Open notebooks from: ~/notebooks/"
 
   SageMakerDomain:
     Type: AWS::SageMaker::Domain

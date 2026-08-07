@@ -586,8 +586,10 @@ Resources:
             ,\n  \"LAMBDA_DOWNLOAD\": \"$(get lambda-download)\",\n  \"LAMBDA_STORE\"\
             : \"$(get lambda-store)\",\n  \"LAMBDA_INVENTORY\": \"$(get lambda-inventory)\"\
             ,\n  \"REPO_DIR\": \"$DIR\"\n}\nEOF\n\n# Copy notebooks directly to home\
-            \ directory so they appear at top of file browser\ncp \"$DIR/notebooks/\"\
-            *.ipynb /home/sagemaker-user/ 2>/dev/null || true\n\n# Clean up dot folders\
+            \ directory so they appear at top of file browser\n# Use --no-preserve\
+            \ to avoid JupyterLab file ID tracking issues\nfor nb in \"$DIR/notebooks/\"\
+            *.ipynb; do\n  cp --no-preserve=all \"$nb\" /home/sagemaker-user/ 2>/dev/null\
+            \ || cp \"$nb\" /home/sagemaker-user/\ndone\n\n# Clean up dot folders\
             \ created by pip/npm that clutter the file browser\nrm -rf /home/sagemaker-user/.agent\
             \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.cache 2>/dev/null\
             \ || true\nrm -rf /home/sagemaker-user/.claude 2>/dev/null || true\nrm\
