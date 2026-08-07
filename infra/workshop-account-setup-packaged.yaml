@@ -585,9 +585,15 @@ Resources:
             $(get lambda-renew)\",\n  \"LAMBDA_STATUS\": \"$(get lambda-status)\"\
             ,\n  \"LAMBDA_DOWNLOAD\": \"$(get lambda-download)\",\n  \"LAMBDA_STORE\"\
             : \"$(get lambda-store)\",\n  \"LAMBDA_INVENTORY\": \"$(get lambda-inventory)\"\
-            ,\n  \"REPO_DIR\": \"$DIR\"\n}\nEOF\n\n# Copy notebooks to home for easy\
-            \ JupyterLab access\ncp -r \"$DIR/notebooks\" /home/sagemaker-user/certagent-notebooks\
-            \ 2>/dev/null || true\necho \"=== CertAgent workshop ready ===\"\n"
+            ,\n  \"REPO_DIR\": \"$DIR\"\n}\nEOF\n\n# Copy notebooks directly to home\
+            \ directory so they appear at top of file browser\ncp \"$DIR/notebooks/\"\
+            *.ipynb /home/sagemaker-user/ 2>/dev/null || true\n\n# Clean up dot folders\
+            \ created by pip/npm that clutter the file browser\nrm -rf /home/sagemaker-user/.agent\
+            \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.cache 2>/dev/null\
+            \ || true\nrm -rf /home/sagemaker-user/.claude 2>/dev/null || true\nrm\
+            \ -rf /home/sagemaker-user/.kiro 2>/dev/null || true\nrm -rf /home/sagemaker-user/.local\
+            \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.npm 2>/dev/null ||\
+            \ true\n\necho \"=== CertAgent workshop ready ===\"\n"
     Metadata:
       SamResourceId: LifecycleConfig
   SageMakerDomain:

@@ -469,7 +469,10 @@ Resources:
           EOF
 
           # Copy notebooks directly to home directory so they appear at top of file browser
-          cp "$DIR/notebooks/"*.ipynb /home/sagemaker-user/ 2>/dev/null || true
+          # Use --no-preserve to avoid JupyterLab file ID tracking issues
+          for nb in "$DIR/notebooks/"*.ipynb; do
+            cp --no-preserve=all "$nb" /home/sagemaker-user/ 2>/dev/null || cp "$nb" /home/sagemaker-user/
+          done
 
           # Clean up dot folders created by pip/npm that clutter the file browser
           rm -rf /home/sagemaker-user/.agent 2>/dev/null || true
