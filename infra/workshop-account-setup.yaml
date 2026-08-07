@@ -362,30 +362,63 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: LambdaAccess
+                Effect: Allow
                 Action: [lambda:InvokeFunction, lambda:AddPermission, lambda:RemovePermission, lambda:GetPolicy, lambda:GetFunctionConfiguration]
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${WorkshopPrefix}-*'
-              - Effect: Allow
+              - Sid: DynamoDBAccess
+                Effect: Allow
                 Action: [dynamodb:Scan, dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:BatchWriteItem, dynamodb:Query]
                 Resource: !GetAtt CertInventoryTable.Arn
-              - Effect: Allow
+              - Sid: SecretsManagerAccess
+                Effect: Allow
                 Action: [secretsmanager:GetSecretValue, secretsmanager:PutSecretValue,
                          secretsmanager:CreateSecret, secretsmanager:ListSecrets, secretsmanager:DeleteSecret]
                 Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/${WorkshopPrefix}/*'
-              - Effect: Allow
-                Action: ssm:GetParameter
+              - Sid: SSMAccess
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:PutParameter, ssm:GetParametersByPath]
                 Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/workshop/${WorkshopPrefix}/*'
-              - Effect: Allow
-                Action: [bedrock:*, bedrock-agent:*]
+              - Sid: BedrockAccess
+                Effect: Allow
+                Action: [bedrock:*, bedrock-agent:*, bedrock-agentcore:*]
                 Resource: '*'
-              - Effect: Allow
+              - Sid: IAMForAgentCore
+                Effect: Allow
                 Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:PutRolePolicy,
-                         iam:DeleteRolePolicy, iam:PassRole]
-                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${WorkshopPrefix}*'
-              - Effect: Allow
+                         iam:DeleteRolePolicy, iam:AttachRolePolicy, iam:DetachRolePolicy,
+                         iam:PassRole, iam:TagRole]
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${WorkshopPrefix}*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCore*'
+              - Sid: CodeBuildForAgentCore
+                Effect: Allow
+                Action: 'codebuild:*'
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/bedrock-agentcore-*'
+              - Sid: ECRForAgentCore
+                Effect: Allow
+                Action: [ecr:CreateRepository, ecr:DescribeRepositories, ecr:GetAuthorizationToken,
+                         ecr:BatchCheckLayerAvailability, ecr:PutImage, ecr:InitiateLayerUpload,
+                         ecr:UploadLayerPart, ecr:CompleteLayerUpload, ecr:BatchGetImage,
+                         ecr:GetDownloadUrlForLayer]
+                Resource: '*'
+              - Sid: S3ForAgentCore
+                Effect: Allow
+                Action: 's3:*'
+                Resource:
+                  - !Sub 'arn:aws:s3:::bedrock-agentcore-*'
+                  - !Sub 'arn:aws:s3:::bedrock-agentcore-*/*'
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action: [logs:CreateLogGroup, logs:PutResourcePolicy, logs:DescribeResourcePolicies,
+                         logs:DescribeLogGroups, logs:GetLogEvents, logs:FilterLogEvents]
+                Resource: '*'
+              - Sid: SNSAccess
+                Effect: Allow
                 Action: [sns:ListTopics, sns:Subscribe, sns:Publish]
                 Resource: '*'
-              - Effect: Allow
+              - Sid: EventBridgeAccess
+                Effect: Allow
                 Action: [events:DescribeRule, events:ListTargetsByRule]
                 Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${WorkshopPrefix}-*'
 
