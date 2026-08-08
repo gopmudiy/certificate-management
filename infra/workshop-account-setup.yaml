@@ -443,11 +443,17 @@ Resources:
           # Clone or update repo
           if [ -d "$DIR/.git" ]; then
             git -C "$DIR" pull --rebase origin "$BRANCH" || true
+            rm -rf "$DIR/.git"
           else
             git clone --branch "$BRANCH" "$REPO" "$DIR"
             # Remove .git so JupyterLab uses standard file tracking (not git-based)
             rm -rf "$DIR/.git"
           fi
+
+          # Remove files not needed for lab execution
+          rm -f "$DIR/README-original.md" "$DIR/README-shrome-changes.md" 2>/dev/null || true
+          rm -rf "$DIR/infra" "$DIR/scripts" "$DIR/CertAgent" "$DIR/docs" "$DIR/proactive" "$DIR/src" "$DIR/tests" "$DIR/.kiro" "$DIR/.qodo" 2>/dev/null || true
+          rm -f "$DIR/requirements-dev.txt" "$DIR/requirements-workshop.txt" "$DIR/template.yaml" "$DIR/.gitignore" 2>/dev/null || true
 
           # Write config from SSM
           P="/workshop/$PREFIX"
