@@ -589,14 +589,14 @@ Resources:
             : \"$(get lambda-inventory)\",\n  \"REPO_DIR\": \"$DIR\"\n}\nEOF\n\n#\
             \ Notebooks are served directly from the git clone path\n# Do NOT copy\
             \ - JupyterLab file ID tracking breaks on copied files\n# Participants\
-            \ open from: certagent-workshop/notebooks/\n\n# Clean up dot folders created\
-            \ by pip that clutter the file browser\nrm -rf /home/sagemaker-user/.agent\
-            \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.cache 2>/dev/null\
+            \ open from: certagent-workshop/notebooks/\n\n# Clean up dot folders that\
+            \ clutter the file browser\n# NOTE: Do NOT delete .local or .jupyter -\
+            \ they contain JupyterLab runtime state\nrm -rf /home/sagemaker-user/.agent\
+            \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.cache/pip 2>/dev/null\
             \ || true\nrm -rf /home/sagemaker-user/.claude 2>/dev/null || true\nrm\
-            \ -rf /home/sagemaker-user/.kiro 2>/dev/null || true\nrm -rf /home/sagemaker-user/.local\
-            \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.npm 2>/dev/null ||\
-            \ true\n\necho \"=== CertAgent workshop ready ===\"\necho \"Open notebooks\
-            \ from: certagent-workshop/notebooks/\"\n"
+            \ -rf /home/sagemaker-user/.kiro 2>/dev/null || true\nrm -rf /home/sagemaker-user/.npm\
+            \ 2>/dev/null || true\n\necho \"=== CertAgent workshop ready ===\"\necho\
+            \ \"Open notebooks from: certagent-workshop/notebooks/\"\n"
     Metadata:
       SamResourceId: LifecycleConfig
   SageMakerDomain:
