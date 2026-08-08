@@ -474,12 +474,12 @@ Resources:
           # Do NOT copy - JupyterLab file ID tracking breaks on copied files
           # Participants open from: certagent-workshop/notebooks/
           
-          # Clean up dot folders created by pip that clutter the file browser
+          # Clean up dot folders that clutter the file browser
+          # NOTE: Do NOT delete .local or .jupyter - they contain JupyterLab runtime state
           rm -rf /home/sagemaker-user/.agent 2>/dev/null || true
-          rm -rf /home/sagemaker-user/.cache 2>/dev/null || true
+          rm -rf /home/sagemaker-user/.cache/pip 2>/dev/null || true
           rm -rf /home/sagemaker-user/.claude 2>/dev/null || true
           rm -rf /home/sagemaker-user/.kiro 2>/dev/null || true
-          rm -rf /home/sagemaker-user/.local 2>/dev/null || true
           rm -rf /home/sagemaker-user/.npm 2>/dev/null || true
 
           echo "=== CertAgent workshop ready ==="
