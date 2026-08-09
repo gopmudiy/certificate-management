@@ -573,9 +573,15 @@ Resources:
             \ -q \"cryptography>=42.0.0\" \"pydantic>=2.0.0\" \"pyyaml>=6.0.0\" \"\
             tabulate>=0.9.0\" \"boto3>=1.35.0\"\n\n# Clone or update repo\nif [ -d\
             \ \"$DIR/.git\" ]; then\n  git -C \"$DIR\" pull --rebase origin \"$BRANCH\"\
-            \ || true\nelse\n  git clone --branch \"$BRANCH\" \"$REPO\" \"$DIR\"\n\
-            \  # Remove .git so JupyterLab uses standard file tracking (not git-based)\n\
-            \  rm -rf \"$DIR/.git\"\nfi\n\n# Write config from SSM\nP=\"/workshop/$PREFIX\"\
+            \ || true\n  rm -rf \"$DIR/.git\"\nelse\n  git clone --branch \"$BRANCH\"\
+            \ \"$REPO\" \"$DIR\"\n  # Remove .git so JupyterLab uses standard file\
+            \ tracking (not git-based)\n  rm -rf \"$DIR/.git\"\nfi\n\n# Remove files\
+            \ not needed for lab execution\nrm -f \"$DIR/README-original.md\" \"$DIR/README-shrome-changes.md\"\
+            \ 2>/dev/null || true\nrm -rf \"$DIR/infra\" \"$DIR/scripts\" \"$DIR/CertAgent\"\
+            \ \"$DIR/docs\" \"$DIR/proactive\" \"$DIR/src\" \"$DIR/tests\" \"$DIR/.kiro\"\
+            \ \"$DIR/.qodo\" 2>/dev/null || true\nrm -f \"$DIR/requirements-dev.txt\"\
+            \ \"$DIR/requirements-workshop.txt\" \"$DIR/template.yaml\" \"$DIR/.gitignore\"\
+            \ 2>/dev/null || true\n\n# Write config from SSM\nP=\"/workshop/$PREFIX\"\
             \nget() { aws ssm get-parameter --region \"$REGION\" --name \"$P/$1\"\
             \ --query 'Parameter.Value' --output text 2>/dev/null || echo \"\"; }\n\
             cat > /tmp/certagent_config.json <<EOF\n{\n  \"AWS_REGION\": \"$REGION\"\
@@ -587,16 +593,21 @@ Resources:
             \ \"$(get lambda-status)\",\n  \"LAMBDA_DOWNLOAD\": \"$(get lambda-download)\"\
             ,\n  \"LAMBDA_STORE\": \"$(get lambda-store)\",\n  \"LAMBDA_INVENTORY\"\
             : \"$(get lambda-inventory)\",\n  \"REPO_DIR\": \"$DIR\"\n}\nEOF\n\n#\
-            \ Notebooks are served directly from the git clone path\n# Do NOT copy\
-            \ - JupyterLab file ID tracking breaks on copied files\n# Participants\
-            \ open from: certagent-workshop/notebooks/\n\n# Clean up dot folders that\
-            \ clutter the file browser\n# NOTE: Do NOT delete .local or .jupyter -\
-            \ they contain JupyterLab runtime state\nrm -rf /home/sagemaker-user/.agent\
+            \ Expose 3 module folders at home root for clean JupyterLab experience\n\
+            cp -r \"$DIR/modules/Module-1-CertManagement\" /home/sagemaker-user/\n\
+            cp -r \"$DIR/modules/Module-2-BedrockOptimizations\" /home/sagemaker-user/\n\
+            cp -r \"$DIR/modules/Module-3-AgentCoreOptimization\" /home/sagemaker-user/\n\
+            cp \"$DIR/modules/README.md\" /home/sagemaker-user/\n\n# Clean up dot\
+            \ folders that clutter the file browser\n# NOTE: Do NOT delete .local\
+            \ or .jupyter - they contain JupyterLab runtime state\nrm -rf /home/sagemaker-user/.agent\
             \ 2>/dev/null || true\nrm -rf /home/sagemaker-user/.cache/pip 2>/dev/null\
             \ || true\nrm -rf /home/sagemaker-user/.claude 2>/dev/null || true\nrm\
             \ -rf /home/sagemaker-user/.kiro 2>/dev/null || true\nrm -rf /home/sagemaker-user/.npm\
-            \ 2>/dev/null || true\n\necho \"=== CertAgent workshop ready ===\"\necho\
-            \ \"Open notebooks from: certagent-workshop/notebooks/\"\n"
+            \ 2>/dev/null || true\n# Remove the cloned repo folder (modules are already\
+            \ copied)\nrm -rf /home/sagemaker-user/certagent-workshop 2>/dev/null\
+            \ || true\n\necho \"=== AI Operations Workshop ready ===\"\necho \"Modules:\
+            \ Module-1-CertManagement, Module-2-BedrockOptimizations, Module-3-AgentCoreOptimization\"\
+            \n"
     Metadata:
       SamResourceId: LifecycleConfig
   SageMakerDomain:
