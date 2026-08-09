@@ -391,6 +391,7 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${WorkshopPrefix}*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCore*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/BedrockKBRole-*'
               - Sid: CodeBuildForAgentCore
                 Effect: Allow
                 Action: 'codebuild:*'
@@ -408,6 +409,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::bedrock-agentcore-*'
                   - !Sub 'arn:aws:s3:::bedrock-agentcore-*/*'
+                  - !Sub 'arn:aws:s3:::bedrock-kb-workshop-*'
+                  - !Sub 'arn:aws:s3:::bedrock-kb-workshop-*/*'
               - Sid: CloudWatchLogs
                 Effect: Allow
                 Action: [logs:CreateLogGroup, logs:PutResourcePolicy, logs:DescribeResourcePolicies,
