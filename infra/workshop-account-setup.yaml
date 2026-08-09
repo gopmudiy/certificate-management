@@ -383,6 +383,10 @@ Resources:
                 Effect: Allow
                 Action: [bedrock:*, bedrock-agent:*, bedrock-agentcore:*]
                 Resource: '*'
+              - Sid: AOSSAccess
+                Effect: Allow
+                Action: 'aoss:*'
+                Resource: '*'
               - Sid: IAMForAgentCore
                 Effect: Allow
                 Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:PutRolePolicy,
