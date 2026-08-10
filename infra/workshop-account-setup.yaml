@@ -420,6 +420,10 @@ Resources:
                 Action: [logs:CreateLogGroup, logs:PutResourcePolicy, logs:DescribeResourcePolicies,
                          logs:DescribeLogGroups, logs:GetLogEvents, logs:FilterLogEvents]
                 Resource: '*'
+              - Sid: CostExplorerAndBudgets
+                Effect: Allow
+                Action: ['ce:*', 'budgets:*']
+                Resource: '*'
               - Sid: SNSAccess
                 Effect: Allow
                 Action: [sns:ListTopics, sns:Subscribe, sns:Publish]
