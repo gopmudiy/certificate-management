@@ -387,6 +387,10 @@ Resources:
                 Effect: Allow
                 Action: 'aoss:*'
                 Resource: '*'
+              - Sid: S3VectorsAccess
+                Effect: Allow
+                Action: 's3vectors:*'
+                Resource: '*'
               - Sid: IAMForAgentCore
                 Effect: Allow
                 Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:PutRolePolicy,
